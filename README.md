@@ -1,8 +1,11 @@
-## Simple Oracle Connection Tester
+## Simple Oracle Transaction Tester
 
 ### Pre-requisites
 You'll need a JVM of version 11 or higher. OpenJDK or Oracle works fine
 If you want to use the oci connectivity you'll need to have an Oracle Client installed (Instant or full fat). The ivy client used will download 19.8 jar files. If you want to use a different client make sure you edit ```ivy.xml```  
+
+The workload will insert rows and retrieve them from the Swingbench ```CUSTOMERS``` Table. In the initial build it it expected fro this table to be there. In later builds I'll automoatically create the table.
+
 
 ### Install
 
