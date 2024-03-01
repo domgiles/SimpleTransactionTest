@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project name="simpleoratest" default="createjar" xmlns:ivy="antlib:org.apache.ivy.ant">
+<project name="simpletransactiontest" default="createjar" xmlns:ivy="antlib:org.apache.ivy.ant">
 
 
     <property name="libs" location="lib"/>
@@ -46,9 +46,9 @@
     </target>
 
     <target name="createjar" depends="clean,compile,init" description="Create the project jar">
-        <jar destfile="${basedir}/connectiontest.jar">
+        <jar destfile="${basedir}/transactiontest.jar">
             <manifest>
-                <attribute name="Main-Class" value="com.dom.ConnectionTest"/>
+                <attribute name="Main-Class" value="com.dom.TransactionTest"/>
             </manifest>
             <fileset dir="${out}">
                 <include name="**/*.class"/>

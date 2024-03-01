@@ -7,6 +7,6 @@
         <dependency org="org.apache.commons" name="commons-lang3" rev="latest.integration"/>
         <dependency org="org.apache.commons" name="commons-math3" rev="latest.integration"/>
         <dependency org="commons-cli" name="commons-cli" rev="latest.integration"/>
-        <dependency org="com.oracle.database.jdbc" name="ojdbc8-production" rev="19.8.0.0"/>
+        <dependency org="com.oracle.database.jdbc" name="ojdbc8-production" rev="19.21.0.0"/>
     </dependencies>
 </ivy-module>
