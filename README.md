@@ -38,7 +38,7 @@ usage: parameters:
 ```
 I believe the options should be self-explanatory however a simple example is shown below
 ```shell
- java -jar transactiontest.jar -u soe -p soe -cs //localhost/soe -rt 0:00.5 -tc 20 -tt 50 -ct pds -ac                                                                                                                                        255 ↵
+java -jar transactiontest.jar -u soe -p soe -cs //localhost/soe -rt 0:00.5 -tc 20 -tt 50 -ct pds -ac                                                                                                                                        255 ↵
 Starting Simple Transaction Test
 Using Oracle Driver version 19.21.0.0.0, Built on Wed_Aug_02_04:16:16_PDT_2023
 Connecting using a thin driver

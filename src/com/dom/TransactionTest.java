@@ -1,20 +1,15 @@
 package com.dom;
 
-import oracle.jdbc.AccessToken;
 import oracle.jdbc.OracleDriver;
 import oracle.jdbc.pool.OracleDataSource;
 import oracle.security.pki.OracleWallet;
 import oracle.security.pki.textui.OraclePKIGenFunc;
-import oracle.ucp.ConnectionAffinityCallback;
-import oracle.ucp.ConnectionLabelingCallback;
 import oracle.ucp.jdbc.*;
 import org.apache.commons.cli.*;
 
 import javax.crypto.Cipher;
-import javax.net.ssl.SSLContext;
 import java.io.File;
 import java.io.IOException;
-import java.io.PrintWriter;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.NoSuchAlgorithmException;
@@ -24,7 +19,6 @@ import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
@@ -39,7 +33,24 @@ public class TransactionTest {
     private static final String[] AlphaDataArray = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "v", "w", "u", "x", "y", "z", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "V", "W", "U", "X", "Y", "Z", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0"};
 
 
-    static final String insCustomer = "insert into customers (customer_id,\n" + "                       cust_first_name,\n" + "                       cust_last_name,\n" + "                       nls_language,\n" + "                       nls_territory,\n" + "                       credit_limit,\n" + "                       cust_email,\n" + "                       account_mgr_id,\n" + "                       customer_since,\n" + "                       customer_class,\n" + "                       suggestions,\n" + "                       dob,\n" + "                       mailshot,\n" + "                       partner_mailshot,\n" + "                       preferred_address,\n" + "                       preferred_card)\n" + "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    static final String insCustomer = """
+            insert into customers (customer_id,
+                                   cust_first_name,
+                                   cust_last_name,
+                                   nls_language,
+                                   nls_territory,
+                                   credit_limit,
+                                   cust_email,
+                                   account_mgr_id,
+                                   customer_since,
+                                   customer_class,
+                                   suggestions,
+                                   dob,
+                                   mailshot,
+                                   partner_mailshot,
+                                   preferred_address,
+                                   preferred_card)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""";
 
     private static final Logger logger = Logger.getLogger(TransactionTest.class.getName());
 
@@ -60,19 +71,27 @@ public class TransactionTest {
     }
 
     static boolean benchmarkRunning = true;
-    static Random rand = new Random(System.nanoTime());
+    static final Random rand = new Random(System.nanoTime());
+    static final Map<Integer, String> exceptionsList = new HashMap<>();
+    static boolean errorsOccurred = false;
+
+    private static void processThreadExceptions(SQLException e) {
+        int code = e.getErrorCode();
+        String message = e.getMessage();
+        errorsOccurred = true;
+        exceptionsList.put(code, message);
+    }
 
     private static Map<ResultsMetric, Object> runTransactionWorkLoad(Map<CommandLineOptions, Object> pclo) throws RuntimeException, Error {
+        Map<ResultsMetric, Object> results = new HashMap<>();
         try {
-            Map<ResultsMetric, Object> results = new HashMap<>();
-
             String username = (String) pclo.get(CommandLineOptions.USERNAME);
             String password = (String) pclo.get(CommandLineOptions.PASSWORD);
             String connectString = String.format("jdbc:oracle:%s:@%s", pclo.get(CommandLineOptions.DRIVER_TYPE).toString(), pclo.get(CommandLineOptions.CONNECT_STRING));
             Long thinkTime = (Long) pclo.get(CommandLineOptions.THINK_TIME);
 
-            long timer1 = 0;
-            Connection connection = null;
+            long timer1;
+            Connection connection;
             if (pclo.get(CommandLineOptions.CONNECTION_TYPE) == ConnectionType.ODS) {
                 OracleDataSource ods = new OracleDataSource();
                 ods.setUser(username);
@@ -128,8 +147,13 @@ public class TransactionTest {
                         // Commit the row
                         connection.commit();
                         // Retrieve the row
-                        try (PreparedStatement custDetPs = connection.prepareStatement("select customer_id, cust_first_name, cust_last_name, nls_language, \n" + "  nls_territory, credit_limit, cust_email, account_mgr_id, customer_since, \n" + "  customer_class, suggestions, dob, mailshot, partner_mailshot, \n" + "  preferred_address, preferred_card \n" + "from\n" + " customers where customer_id = ? and rownum < 5");) {
-
+                        try (PreparedStatement custDetPs = connection.prepareStatement("""
+                                select customer_id, cust_first_name, cust_last_name, nls_language,\s
+                                  nls_territory, credit_limit, cust_email, account_mgr_id, customer_since,\s
+                                  customer_class, suggestions, dob, mailshot, partner_mailshot,\s
+                                  preferred_address, preferred_card\s
+                                from
+                                 customers where customer_id = ?""")) {
                             custDetPs.setLong(1, custID);
                             try (ResultSet crs = custDetPs.executeQuery()) {
                                 crs.next();
@@ -150,49 +174,62 @@ public class TransactionTest {
             results.put(ResultsMetric.TOTAL_TRANSACTION_TIME, System.currentTimeMillis() - timer2);
             return results;
         } catch (SQLException e) {
-            logger.log(FINE, "SQL Exception Thown in connect()", e);
-            throw new RuntimeException(e);
+            processThreadExceptions(e);
+            return results;
         }
+
     }
 
     public static Map<ResultsMetric, Object> runTransactions(Map<CommandLineOptions, Object> pclo) {
-        Map<ResultsMetric, Object> result = null;
-        result = runTransactionWorkLoad(pclo);
-        return result;
+        return runTransactionWorkLoad(pclo);
     }
 
     private static List<Map<ResultsMetric, Object>> connectBenchmark(Map<CommandLineOptions, Object> pclo) throws Exception {
-        List<Map<ResultsMetric, Object>> connectResults = null;
+        List<Map<ResultsMetric, Object>> connectResults;
 
         // If using connection pool, create pool
 
         if (pclo.get(CommandLineOptions.CONNECTION_TYPE) == ConnectionType.PDS) {
-            Properties connectionProperties = new Properties();
-            String username = (String) pclo.get(CommandLineOptions.USERNAME);
-            String password = (String) pclo.get(CommandLineOptions.PASSWORD);
-            String connectString = String.format("jdbc:oracle:%s:@%s", pclo.get(CommandLineOptions.DRIVER_TYPE).toString(), pclo.get(CommandLineOptions.CONNECT_STRING));
-            PoolDataSource pds = PoolDataSourceFactory.getPoolDataSource();
-            if ((boolean)pclo.get(CommandLineOptions.USE_AC_DRIVER)) {
-                pds.setConnectionFactoryClassName("oracle.jdbc.replay.OracleDataSourceImpl");
-                connectionProperties.setProperty("oracle.jdbc.fanEnabled","true");
-            } else {
-                pds.setConnectionFactoryClassName("oracle.jdbc.pool.OracleDataSource");
-                connectionProperties.setProperty("oracle.jdbc.fanEnabled","false");
-            }
-            pds.setURL(connectString);
-            pds.setUser(username);
-            pds.setPassword(password);
-            pds.setConnectionPoolName("CONN_TEST_POOL");
-            pds.setInitialPoolSize(15);
-            pds.setMinPoolSize(15);
-            pds.setMaxPoolSize(25);
-            pds.setTimeoutCheckInterval(5);
-            pds.setInactiveConnectionTimeout(10);
+            try {
+                Properties connectionProperties = new Properties();
+                String username = (String) pclo.get(CommandLineOptions.USERNAME);
+                String password = (String) pclo.get(CommandLineOptions.PASSWORD);
+                String connectString = String.format("jdbc:oracle:%s:@%s", pclo.get(CommandLineOptions.DRIVER_TYPE).toString(), pclo.get(CommandLineOptions.CONNECT_STRING));
+                logger.log(FINE, String.format("Connecting to %s with username \"%s\" with password \"%s\"", connectString, username, password));
+                PoolDataSource pds = PoolDataSourceFactory.getPoolDataSource();
+                if ((boolean) pclo.get(CommandLineOptions.USE_AC_DRIVER)) {
+                    pds.setConnectionFactoryClassName("oracle.jdbc.replay.OracleDataSourceImpl");
+                    connectionProperties.setProperty("oracle.jdbc.fanEnabled", "true");
+                } else {
+                    pds.setConnectionFactoryClassName("oracle.jdbc.pool.OracleDataSource");
+                    connectionProperties.setProperty("oracle.jdbc.fanEnabled", "false");
+                }
+                System.out.printf("%sEstablishing a connection pool using %s%s%s driver, Connection String is %s%s%s, Using application continuity driver is %s%b%s%s%n",
+                        ConsoleColours.BLUE,
+                        ConsoleColours.BLUE_BOLD_BRIGHT, pclo.get(CommandLineOptions.DRIVER_TYPE), ConsoleColours.BLUE,
+                        ConsoleColours.BLUE_BOLD_BRIGHT, connectString, ConsoleColours.BLUE,
+                        ConsoleColours.BLUE_BOLD_BRIGHT, pclo.get(CommandLineOptions.USE_AC_DRIVER), ConsoleColours.BLUE,
+                        ConsoleColours.RESET);
+                pds.setURL(connectString);
+                pds.setUser(username);
+                pds.setPassword(password);
+                pds.setConnectionPoolName("CONN_TEST_POOL");
+                pds.setInitialPoolSize(15);
+                pds.setMinPoolSize(15);
+                pds.setMaxPoolSize(25);
+                pds.setTimeoutCheckInterval(5);
+                pds.setInactiveConnectionTimeout(10);
 
-            connectionProperties.setProperty("autoCommit", "false");
-            connectionProperties.setProperty("oracle.jdbc.fanEnabled", "false");
-            pds.setConnectionProperties(connectionProperties);
-            pclo.put(CommandLineOptions.CONNECTION_POOL, pds);
+                connectionProperties.setProperty("autoCommit", "false");
+                connectionProperties.setProperty("oracle.jdbc.fanEnabled", "false");
+                pds.setConnectionProperties(connectionProperties);
+                // Check if it's possible to get a connection
+                Connection connection = pds.getConnection();
+                pclo.put(CommandLineOptions.CONNECTION_POOL, pds);
+            } catch (SQLException e) {
+                System.err.printf("%sUnable to establish a connection pool to %s, See the following message : %s%s", ConsoleColours.RED_BOLD, pclo.get(CommandLineOptions.CONNECT_STRING), ConsoleColours.RESET, e.getMessage());
+                System.exit(-1);
+            }
         }
         logger.fine("Started creating connections");
         List<Callable<Map<ResultsMetric, Object>>> connectTests = new ArrayList<>();
@@ -229,23 +266,33 @@ public class TransactionTest {
             logger.fine("Starting...");
 
             Properties properties = System.getProperties();
-            properties.entrySet().stream().filter(k -> (k.getKey().toString().startsWith("oracle.net") || k.getKey().toString().startsWith("javax.net"))).forEach(k -> System.out.println(String.format("%35s -> %s", k.getKey(), k.getValue())));
+            properties.entrySet().stream().filter(k -> (k.getKey().toString().startsWith("oracle.net") || k.getKey().toString().startsWith("javax.net"))).forEach(k -> System.out.printf("%35s -> %s%n", k.getKey(), k.getValue()));
 
             long startMillis = System.currentTimeMillis();
             System.out.printf("%sStarting Simple Transaction Test%s%n", ConsoleColours.BLUE, ConsoleColours.RESET);
             System.out.printf("%sUsing Oracle Driver version %s%s%s, Built on %s%s%n", ConsoleColours.BLUE, ConsoleColours.BLUE_BOLD_BRIGHT, OracleDriver.getDriverVersion(), ConsoleColours.BLUE, OracleDriver.getBuildDate(), ConsoleColours.RESET);
             System.out.printf("%sConnecting using a %s%s%s driver%s%n", ConsoleColours.BLUE, ConsoleColours.BLUE_BOLD_BRIGHT, pclo.get(CommandLineOptions.DRIVER_TYPE), ConsoleColours.BLUE, ConsoleColours.RESET);
             List<Map<ResultsMetric, Object>> connectResults = connectBenchmark(pclo);
-            OptionalDouble avgConnectTime = connectResults.stream().mapToLong(r -> (Long) r.get(ResultsMetric.CONNECTION_TIME)).average();
-            OptionalDouble avgRunTime = connectResults.stream().mapToLong(r -> (Long) r.get(ResultsMetric.TOTAL_TRANSACTION_TIME)).average();
-            Long totalTransactions = connectResults.stream().mapToLong(r -> (Long) r.get(ResultsMetric.TOTAL_TRANSACTIONS_COMPLETED)).sum();
+            if (!errorsOccurred) {
+                OptionalDouble avgConnectTime = connectResults.stream().mapToLong(r -> (Long) r.get(ResultsMetric.CONNECTION_TIME)).average();
+                OptionalDouble avgRunTime = connectResults.stream().mapToLong(r -> (Long) r.get(ResultsMetric.TOTAL_TRANSACTION_TIME)).average();
+                Long totalTransactions = connectResults.stream().mapToLong(r -> (Long) r.get(ResultsMetric.TOTAL_TRANSACTIONS_COMPLETED)).sum();
 
-            System.out.printf("%sConnected %s%d%s threads, Average connect time = %s%.2fms%s, Average run time = %s%.2fms%s, Total Transactions Completed = %s%d%s%n", ConsoleColours.CYAN, ConsoleColours.RED, connectResults.size(), ConsoleColours.CYAN, ConsoleColours.RED, avgConnectTime.orElse(0), ConsoleColours.CYAN, ConsoleColours.RED, avgRunTime.orElse(0), ConsoleColours.CYAN, ConsoleColours.RED, totalTransactions, ConsoleColours.RESET);
-            logger.fine("Finished...");
-            System.exit(0);
+                System.out.printf("%sConnected %s%d%s threads, Average connect time = %s%.2fms%s, Average run time = %s%.2fms%s, Total Transactions Completed = %s%d%s%n", ConsoleColours.CYAN, ConsoleColours.RED, connectResults.size(), ConsoleColours.CYAN, ConsoleColours.RED, avgConnectTime.orElse(0), ConsoleColours.CYAN, ConsoleColours.RED, avgRunTime.orElse(0), ConsoleColours.CYAN, ConsoleColours.RED, totalTransactions, ConsoleColours.RESET);
+                logger.fine("Finished...");
+                System.exit(0);
+            } else {
+                System.err.printf("%sErrors occured during simple transaction workload.\n%s", ConsoleColours.RED, ConsoleColours.RESET);
+                for (Map.Entry<Integer, String> kv : exceptionsList.entrySet()) {
+                    System.err.printf("%s%d -> %s%s%s%n", ConsoleColours.RED, kv.getKey(), ConsoleColours.RED_BOLD, kv.getValue(), ConsoleColours.RESET);
+                }
+                System.exit(-1);
+            }
         } catch (Exception e) {
-            System.err.printf("%sUnable to connect with the connection string %s, See the following message : %s%s\n", ConsoleColours.RED, pclo.get(CommandLineOptions.CONNECT_STRING), ConsoleColours.RESET, e.getMessage());
+            System.err.printf("%sUnable to run simple transaction workload test, See the following message :\n%s%s\n", ConsoleColours.RED_BOLD, ConsoleColours.RESET, e.getMessage());
+
             logger.log(Level.FINE, "Unexpected Exception thrown and not handled : ", e);
+            System.exit(-1);
         }
     }
 
@@ -302,7 +349,7 @@ public class TransactionTest {
                     System.setProperty("java.util.logging.config.class", "com.dom.LoggerConfig");
                     LogManager.getLogManager().readConfiguration();
                 } catch (IOException e) {
-                    e.printStackTrace();
+                    System.err.printf("%sUnable to find debug config files. Exiting%s%n", ConsoleColours.RED_BOLD, ConsoleColours.RESET);
                 }
             }
             if (cl.hasOption("h")) {
@@ -467,7 +514,7 @@ public class TransactionTest {
                     throw e;
                 }
             });
-            logger.fine(String.format("Deleted tmp directory : %s", path.toString()));
+            logger.fine(String.format("Deleted tmp directory : %s", path));
         } catch (IOException e) {
             throw new RuntimeException("Failed to delete " + path, e);
         }
@@ -477,7 +524,7 @@ public class TransactionTest {
         if (rt != null) {
             StringTokenizer st = new StringTokenizer(rt, ":");
             long hours = Long.parseLong(st.nextToken());
-            long minutes = 0;
+            long minutes ;
             String minString = st.nextToken();
             int secs = 0;
             if (minString.contains(".")) {
