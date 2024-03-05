@@ -55,11 +55,11 @@ public class TransactionTest {
     private static final Logger logger = Logger.getLogger(TransactionTest.class.getName());
 
     private enum CommandLineOptions {
-        USERNAME, PASSWORD, CONNECT_STRING, THREAD_COUNT, CONNECTION_TYPE, DRIVER_TYPE, RUN_TIME, THINK_TIME, CONNECTION_POOL, USE_FAN, USE_AC_DRIVER
+        USERNAME, PASSWORD, CONNECT_STRING, THREAD_COUNT, CONNECTION_TYPE, DRIVER_TYPE, RUN_TIME, THINK_TIME, CONNECTION_POOL, USE_FAN, USE_AC_DRIVER, POOL_SIZE, SHOW_STATS
     }
 
     private enum ResultsMetric {
-        CONNECTION_TIME, TOTAL_TRANSACTION_TIME, TOTAL_TRANSACTIONS_COMPLETED, FAILED_TRANSACTIONS
+        CONNECTION_TIME, TOTAL_TRANSACTION_TIME, TOTAL_TRANSACTIONS_COMPLETED, FAILED_TRANSACTIONS, AVERAGE_RESPONSE_TIME
     }
 
     private enum ConnectionType {
@@ -73,7 +73,10 @@ public class TransactionTest {
     static boolean benchmarkRunning = true;
     static final Random rand = new Random(System.nanoTime());
     static final Map<Integer, String> exceptionsList = new HashMap<>();
+    static final String DEFAULT_TIME_MASK = "%1$tH:%1$tM:%1$tS";
     static boolean errorsOccurred = false;
+    static Long totalTransactionsCompleted = 0L;
+
 
     private static void processThreadExceptions(SQLException e) {
         int code = e.getErrorCode();
@@ -84,14 +87,15 @@ public class TransactionTest {
 
     private static Map<ResultsMetric, Object> runTransactionWorkLoad(Map<CommandLineOptions, Object> pclo) throws RuntimeException, Error {
         Map<ResultsMetric, Object> results = new HashMap<>();
+
         try {
             String username = (String) pclo.get(CommandLineOptions.USERNAME);
             String password = (String) pclo.get(CommandLineOptions.PASSWORD);
             String connectString = String.format("jdbc:oracle:%s:@%s", pclo.get(CommandLineOptions.DRIVER_TYPE).toString(), pclo.get(CommandLineOptions.CONNECT_STRING));
             Long thinkTime = (Long) pclo.get(CommandLineOptions.THINK_TIME);
 
-            long timer1;
-            Connection connection;
+            long timer1 = 0;
+            Connection connection = null;
             if (pclo.get(CommandLineOptions.CONNECTION_TYPE) == ConnectionType.ODS) {
                 OracleDataSource ods = new OracleDataSource();
                 ods.setUser(username);
@@ -103,21 +107,21 @@ public class TransactionTest {
                 ods.setConnectionProperties(connectionProperties);
                 timer1 = System.currentTimeMillis();
                 connection = ods.getConnection();
-            } else {
-                PoolDataSource pds = (PoolDataSource) pclo.get(CommandLineOptions.CONNECTION_POOL);
-                timer1 = System.currentTimeMillis();
-                connection = pds.getConnection();
             }
             results.put(ResultsMetric.CONNECTION_TIME, System.currentTimeMillis() - timer1);
-
             long timer2 = System.currentTimeMillis();
             long transactionCount = 0;
-            try (PreparedStatement custPs = connection.prepareStatement(insCustomer); PreparedStatement seqPs = connection.prepareStatement("select customer_seq.nextval from dual")) {
-                while (benchmarkRunning) {
-                    if (pclo.get(CommandLineOptions.CONNECTION_TYPE) == ConnectionType.PDS) {
-                        PoolDataSource pds = (PoolDataSource) pclo.get(CommandLineOptions.CONNECTION_POOL);
-                        connection = pds.getConnection();
-                    }
+            long totalResponseTime = 0;
+
+            while (benchmarkRunning) {
+
+                long timer3 = System.nanoTime();
+                if (pclo.get(CommandLineOptions.CONNECTION_TYPE) == ConnectionType.PDS) {
+                    PoolDataSource pds = (PoolDataSource) pclo.get(CommandLineOptions.CONNECTION_POOL);
+                    connection = pds.getConnection();
+                }
+                try (PreparedStatement custPs = connection.prepareStatement(insCustomer);
+                     PreparedStatement seqPs = connection.prepareStatement("select customer_seq.nextval from dual")) {
                     // Insert a row into database and then retrieve it
                     // First get a sequence
                     try (ResultSet rs = seqPs.executeQuery()) {
@@ -146,7 +150,7 @@ public class TransactionTest {
                         custPs.execute();
                         // Commit the row
                         connection.commit();
-                        // Retrieve the row
+                        // Retrieve the row that's just been inserted
                         try (PreparedStatement custDetPs = connection.prepareStatement("""
                                 select customer_id, cust_first_name, cust_last_name, nls_language,\s
                                   nls_territory, credit_limit, cust_email, account_mgr_id, customer_since,\s
@@ -156,15 +160,23 @@ public class TransactionTest {
                                  customers where customer_id = ?""")) {
                             custDetPs.setLong(1, custID);
                             try (ResultSet crs = custDetPs.executeQuery()) {
-                                crs.next();
+                                if (crs.next()) {
+                                    int id = crs.getInt(1);
+                                    String name = crs.getString(2);
+                                }
                             }
                         }
                         transactionCount += 1;
+                        totalTransactionsCompleted += 1;
+                        // Close the connection pool if needed
                         if (pclo.get(CommandLineOptions.CONNECTION_TYPE) == ConnectionType.PDS) {
                             connection.close();
+                            connection = null;
                         }
+                        totalResponseTime = System.nanoTime() - timer3;
+                        // Sleep for a random period of time
                         try {
-                            Thread.sleep(thinkTime);
+                            Thread.sleep(randomLong(thinkTime / 2, thinkTime));
                         } catch (InterruptedException ignore) {
                         }
                     }
@@ -172,8 +184,11 @@ public class TransactionTest {
             }
             results.put(ResultsMetric.TOTAL_TRANSACTIONS_COMPLETED, transactionCount);
             results.put(ResultsMetric.TOTAL_TRANSACTION_TIME, System.currentTimeMillis() - timer2);
+            results.put(ResultsMetric.AVERAGE_RESPONSE_TIME, transactionCount == 0 ? 0d : (((double) totalResponseTime / transactionCount)) / 1000000d);
+//            System.out.printf("Total Transactions = %d%n", transactionCount);
             return results;
         } catch (SQLException e) {
+            logger.log(FINE, e.getMessage());
             processThreadExceptions(e);
             return results;
         }
@@ -197,16 +212,18 @@ public class TransactionTest {
                 String connectString = String.format("jdbc:oracle:%s:@%s", pclo.get(CommandLineOptions.DRIVER_TYPE).toString(), pclo.get(CommandLineOptions.CONNECT_STRING));
                 logger.log(FINE, String.format("Connecting to %s with username \"%s\" with password \"%s\"", connectString, username, password));
                 PoolDataSource pds = PoolDataSourceFactory.getPoolDataSource();
+//                PoolDataSource pds = PoolDataSourceFactory.getPoolDataSource();
                 if ((boolean) pclo.get(CommandLineOptions.USE_AC_DRIVER)) {
-                    pds.setConnectionFactoryClassName("oracle.jdbc.replay.OracleDataSourceImpl");
+//                    pds.setConnectionFactoryClassName("oracle.jdbc.replay.OracleDataSourceImpl");
                     connectionProperties.setProperty("oracle.jdbc.fanEnabled", "true");
                 } else {
                     pds.setConnectionFactoryClassName("oracle.jdbc.pool.OracleDataSource");
-                    connectionProperties.setProperty("oracle.jdbc.fanEnabled", "false");
+//                    connectionProperties.setProperty("oracle.jdbc.fanEnabled", "false");
                 }
-                System.out.printf("%sEstablishing a connection pool using %s%s%s driver, Connection String is %s%s%s, Using application continuity driver is %s%b%s%s%n",
+                System.out.printf("%sEstablishing a connection pool using %s%s%s driver of size %s%d%s, Connection String is %s%s%s, Using application continuity driver is %s%b%s%s%n",
                         ConsoleColours.BLUE,
                         ConsoleColours.BLUE_BOLD_BRIGHT, pclo.get(CommandLineOptions.DRIVER_TYPE), ConsoleColours.BLUE,
+                        ConsoleColours.BLUE_BOLD_BRIGHT, (Integer) pclo.get(CommandLineOptions.POOL_SIZE), ConsoleColours.BLUE,
                         ConsoleColours.BLUE_BOLD_BRIGHT, connectString, ConsoleColours.BLUE,
                         ConsoleColours.BLUE_BOLD_BRIGHT, pclo.get(CommandLineOptions.USE_AC_DRIVER), ConsoleColours.BLUE,
                         ConsoleColours.RESET);
@@ -214,19 +231,24 @@ public class TransactionTest {
                 pds.setUser(username);
                 pds.setPassword(password);
                 pds.setConnectionPoolName("CONN_TEST_POOL");
-                pds.setInitialPoolSize(15);
-                pds.setMinPoolSize(15);
-                pds.setMaxPoolSize(25);
-                pds.setTimeoutCheckInterval(5);
+                pds.setMinPoolSize(1);
+                pds.setInitialPoolSize((Integer) pclo.get(CommandLineOptions.POOL_SIZE));
+                pds.setMinPoolSize((Integer) pclo.get(CommandLineOptions.POOL_SIZE)/2);
+                pds.setMaxPoolSize((Integer) pclo.get(CommandLineOptions.POOL_SIZE));
+                pds.setTimeoutCheckInterval(2);
                 pds.setInactiveConnectionTimeout(10);
-
+                pds.setConnectionWaitTimeout(20);
+                pds.setAbandonedConnectionTimeout(20);
                 connectionProperties.setProperty("autoCommit", "false");
                 connectionProperties.setProperty("oracle.jdbc.fanEnabled", "false");
                 pds.setConnectionProperties(connectionProperties);
+                pds.setConnectionPoolName("TransactionTest");
                 // Check if it's possible to get a connection
                 Connection connection = pds.getConnection();
+                connection.close();
                 pclo.put(CommandLineOptions.CONNECTION_POOL, pds);
             } catch (SQLException e) {
+                logger.log(FINE, String.format("%s", e.getMessage()));
                 System.err.printf("%sUnable to establish a connection pool to %s, See the following message : %s%s", ConsoleColours.RED_BOLD, pclo.get(CommandLineOptions.CONNECT_STRING), ConsoleColours.RESET, e.getMessage());
                 System.exit(-1);
             }
@@ -247,8 +269,47 @@ public class TransactionTest {
             }
         };
         timer.schedule(task, (long) pclo.get(CommandLineOptions.RUN_TIME));
-        ExecutorService executor = Executors.newWorkStealingPool();
+        ExecutorService executor = Executors.newWorkStealingPool((Integer) pclo.get(CommandLineOptions.THREAD_COUNT) + 1);
         logger.fine("Asking Threads to connect");
+        PoolDataSource pds = (PoolDataSource) pclo.get(CommandLineOptions.CONNECTION_POOL);
+        Runnable runnable = () -> {
+            String header[] = null;
+            if (pclo.get(CommandLineOptions.CONNECTION_TYPE) == ConnectionType.PDS) {
+                header = new String[]{"Time", "TPS", "Available", "Borrowed", "Created", "Closed", "Wait Time"};
+//                header = new String[]{"Time", "TPS", "Available", "Borrowed", "Returned", "Created", "Closed", "Wait Time"};
+            } else {
+                header = new String[]{"Time", "TPS"};
+            }
+            int minSpacing = 10;
+            String hf = formatStringArray(header, minSpacing, ConsoleColours.YELLOW);
+            System.out.println(hf);
+            long oldTotalTransactionsCompleted = 0;
+            while (benchmarkRunning) {
+                String[] values;
+                long txDifference = totalTransactionsCompleted - oldTotalTransactionsCompleted;
+                oldTotalTransactionsCompleted = totalTransactionsCompleted;
+                if (pclo.get(CommandLineOptions.CONNECTION_TYPE) == ConnectionType.PDS) {
+                    values = new String[]{String.format(DEFAULT_TIME_MASK, new java.util.Date(System.currentTimeMillis())),
+                            Long.toString(txDifference),
+                            Integer.toString(pds.getStatistics().getAvailableConnectionsCount()),
+                            Integer.toString(pds.getStatistics().getBorrowedConnectionsCount()),
+//                            Long.toString(pds.getStatistics().getCumulativeConnectionReturnedCount()),
+                            Integer.toString(pds.getStatistics().getConnectionsCreatedCount()),
+                            Integer.toString(pds.getStatistics().getConnectionsClosedCount()),
+                            Long.toString(pds.getStatistics().getAverageConnectionWaitTime())
+                    };
+                } else {
+                    values = new String[]{String.format(DEFAULT_TIME_MASK, new java.util.Date(System.currentTimeMillis())),
+                            Long.toString(txDifference)};
+                }
+                System.out.println(formatStringArray(values, minSpacing, ConsoleColours.CYAN_BRIGHT));
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ignore) {
+                }
+            }
+        };
+        executor.submit(runnable);
         connectResults = executor.invokeAll(connectTests).stream().map(future -> {
             try {
                 return future.get();
@@ -258,6 +319,19 @@ public class TransactionTest {
         }).collect(Collectors.toList());
 
         return connectResults;
+    }
+
+    private static String formatStringArray(String[] header, int minSpacing, String colour) {
+        String[] result1 = new String[header.length];
+        for (int i = 0; i < header.length; i++) {
+            int l = Math.max(header[i].length(), minSpacing);
+            result1[i] = (String.format("%s%s %s", colour, String.format("%%%ds", l), ConsoleColours.RESET));
+        }
+        StringBuilder result2 = new StringBuilder();
+        for (int i = 0; i < result1.length; i++) {
+            result2.append(String.format(result1[i], header[i]));
+        }
+        return result2.toString();
     }
 
     public static void main(String[] args) {
@@ -275,10 +349,15 @@ public class TransactionTest {
             List<Map<ResultsMetric, Object>> connectResults = connectBenchmark(pclo);
             if (!errorsOccurred) {
                 OptionalDouble avgConnectTime = connectResults.stream().mapToLong(r -> (Long) r.get(ResultsMetric.CONNECTION_TIME)).average();
-                OptionalDouble avgRunTime = connectResults.stream().mapToLong(r -> (Long) r.get(ResultsMetric.TOTAL_TRANSACTION_TIME)).average();
+//                OptionalDouble avgRunTime = connectResults.stream().mapToLong(r -> (Long) r.get(ResultsMetric.TOTAL_TRANSACTION_TIME)).average();
+                OptionalDouble avgResponseTime = connectResults.stream().mapToDouble(r -> (Double) r.get(ResultsMetric.AVERAGE_RESPONSE_TIME)).average();
                 Long totalTransactions = connectResults.stream().mapToLong(r -> (Long) r.get(ResultsMetric.TOTAL_TRANSACTIONS_COMPLETED)).sum();
 
-                System.out.printf("%sConnected %s%d%s threads, Average connect time = %s%.2fms%s, Average run time = %s%.2fms%s, Total Transactions Completed = %s%d%s%n", ConsoleColours.CYAN, ConsoleColours.RED, connectResults.size(), ConsoleColours.CYAN, ConsoleColours.RED, avgConnectTime.orElse(0), ConsoleColours.CYAN, ConsoleColours.RED, avgRunTime.orElse(0), ConsoleColours.CYAN, ConsoleColours.RED, totalTransactions, ConsoleColours.RESET);
+                System.out.printf("%sConnected %s%d%s threads, Average connect time = %s%.2fms%s, Average response time = %s%.2fms%s, Total transactions completed = %s%d%s%n",
+                        ConsoleColours.CYAN, ConsoleColours.RED, connectResults.size(),
+                        ConsoleColours.CYAN, ConsoleColours.RED, avgConnectTime.orElse(0),
+                        ConsoleColours.CYAN, ConsoleColours.RED, avgResponseTime.orElse(0), ConsoleColours.CYAN,
+                        ConsoleColours.RED, totalTransactions, ConsoleColours.RESET);
                 logger.fine("Finished...");
                 System.exit(0);
             } else {
@@ -336,10 +415,13 @@ public class TransactionTest {
         option29.setArgName("thinktime");
         Option option30 = new Option("ac", "use application continuity");
         option30.setArgs(0);
+        Option option31 = new Option("ps", "Pool Size");
+        option31.setArgs(1);
+        option31.setArgName("pool size");
 
         Option option100 = new Option("debug", "turn on debugging. Written to standard out");
 
-        options.addOption(option8).addOption(option9).addOption(option10).addOption(option30).addOption(option14).addOption(option25).addOption(option13).addOption(option26).addOption(option27).addOption(option28).addOption(option29).addOption(option100);
+        options.addOption(option8).addOption(option9).addOption(option10).addOption(option30).addOption(option14).addOption(option25).addOption(option13).addOption(option26).addOption(option27).addOption(option28).addOption(option29).addOption(option30).addOption(option31).addOption(option100);
         CommandLineParser clp = new DefaultParser();
         CommandLine cl;
         try {
@@ -412,6 +494,11 @@ public class TransactionTest {
             } else {
                 parsedOptions.put(CommandLineOptions.USE_AC_DRIVER, false);
                 parsedOptions.put(CommandLineOptions.USE_FAN, false);
+            }
+            if (cl.hasOption("ps")) {
+                parsedOptions.put(CommandLineOptions.POOL_SIZE, Integer.parseInt(cl.getOptionValue("ps")));
+            } else {
+                parsedOptions.put(CommandLineOptions.POOL_SIZE, -1);
             }
 
         } catch (ParseException pe) {
@@ -524,7 +611,7 @@ public class TransactionTest {
         if (rt != null) {
             StringTokenizer st = new StringTokenizer(rt, ":");
             long hours = Long.parseLong(st.nextToken());
-            long minutes ;
+            long minutes;
             String minString = st.nextToken();
             int secs = 0;
             if (minString.contains(".")) {

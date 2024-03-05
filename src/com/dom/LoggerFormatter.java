@@ -36,7 +36,7 @@ public class LoggerFormatter extends Formatter {
             PrintWriter pw = new PrintWriter(sw);
             record.getThrown().printStackTrace(pw);
             sb.append("\n");
-            sb.append(sw.toString());
+            sb.append(sw);
         }
 
         sb.append("\n");
