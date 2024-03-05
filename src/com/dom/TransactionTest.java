@@ -214,11 +214,11 @@ public class TransactionTest {
                 PoolDataSource pds = PoolDataSourceFactory.getPoolDataSource();
 //                PoolDataSource pds = PoolDataSourceFactory.getPoolDataSource();
                 if ((boolean) pclo.get(CommandLineOptions.USE_AC_DRIVER)) {
-//                    pds.setConnectionFactoryClassName("oracle.jdbc.replay.OracleDataSourceImpl");
+                    pds.setConnectionFactoryClassName("oracle.jdbc.replay.OracleDataSourceImpl");
                     connectionProperties.setProperty("oracle.jdbc.fanEnabled", "true");
                 } else {
                     pds.setConnectionFactoryClassName("oracle.jdbc.pool.OracleDataSource");
-//                    connectionProperties.setProperty("oracle.jdbc.fanEnabled", "false");
+                    connectionProperties.setProperty("oracle.jdbc.fanEnabled", "false");
                 }
                 System.out.printf("%sEstablishing a connection pool using %s%s%s driver of size %s%d%s, Connection String is %s%s%s, Using application continuity driver is %s%b%s%s%n",
                         ConsoleColours.BLUE,
