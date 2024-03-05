@@ -96,6 +96,7 @@ public class TransactionTest {
 
             long timer1 = 0;
             Connection connection = null;
+            timer1 = System.currentTimeMillis();
             if (pclo.get(CommandLineOptions.CONNECTION_TYPE) == ConnectionType.ODS) {
                 OracleDataSource ods = new OracleDataSource();
                 ods.setUser(username);
@@ -105,7 +106,7 @@ public class TransactionTest {
                 connectionProperties.setProperty("autoCommit", "false");
                 connectionProperties.setProperty("oracle.jdbc.fanEnabled", "false");
                 ods.setConnectionProperties(connectionProperties);
-                timer1 = System.currentTimeMillis();
+
                 connection = ods.getConnection();
             }
             results.put(ResultsMetric.CONNECTION_TIME, System.currentTimeMillis() - timer1);
@@ -353,7 +354,7 @@ public class TransactionTest {
                 OptionalDouble avgResponseTime = connectResults.stream().mapToDouble(r -> (Double) r.get(ResultsMetric.AVERAGE_RESPONSE_TIME)).average();
                 Long totalTransactions = connectResults.stream().mapToLong(r -> (Long) r.get(ResultsMetric.TOTAL_TRANSACTIONS_COMPLETED)).sum();
 
-                System.out.printf("%sConnected %s%d%s threads, Average connect time = %s%.2fms%s, Average response time = %s%.2fms%s, Total transactions completed = %s%d%s%n",
+                System.out.printf("%sConnected %s%d%s threads, Average connect time = %s%.2fms%s, Average response time = %s%.3fms%s, Total transactions completed = %s%d%s%n",
                         ConsoleColours.CYAN, ConsoleColours.RED, connectResults.size(),
                         ConsoleColours.CYAN, ConsoleColours.RED, avgConnectTime.orElse(0),
                         ConsoleColours.CYAN, ConsoleColours.RED, avgResponseTime.orElse(0), ConsoleColours.CYAN,
